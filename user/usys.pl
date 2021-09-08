@@ -36,3 +36,17 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+# threads:
+  entry("kthread_id");
+  entry("get_father_pid");
+  entry("kthread_create");
+  entry("kthread_exit");
+  entry("kthread_join");
+# signals:
+  entry("sigprocmask");
+  entry("sigaction");
+  entry("sigret");
+entry("bsem_alloc");
+entry("bsem_free");
+entry("bsem_down");
+entry("bsem_up");

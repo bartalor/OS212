@@ -11,3 +11,37 @@
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       1000  // size of file system in blocks
 #define MAXPATH      128   // maximum file path name
+
+//my definitions:
+
+//special handlers
+//#define SIG_DFL  0 /* default signal handling */
+//#define SIG_IGN  1 /* ignore signal */
+
+#define SIG_DFL (void (*) ()) 0 /* default signal handling */
+#define SIG_IGN (void (*) ()) 1 /* ignore signal */
+
+//sig nums
+#define SIGKILL 9
+#define SIGSTOP 17
+#define SIGCONT 19
+
+//useful defines
+#define NUM_OF_SIGNALS 32
+#define MIN_SIG  0
+#define MAX_SIG  31
+
+#define NTHREAD 8
+
+#define NBSEM 10
+
+#define MAX_STACK_SIZE 4000
+
+#define FREE 0
+
+#define LOCKED 1
+
+#define DEBUG 0
+
+
+

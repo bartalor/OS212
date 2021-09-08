@@ -59,7 +59,6 @@ int
 consolewrite(int user_src, uint64 src, int n)
 {
   int i;
-
   for(i = 0; i < n; i++){
     char c;
     if(either_copyin(&c, user_src, src+i, 1) == -1)
@@ -82,7 +81,6 @@ consoleread(int user_dst, uint64 dst, int n)
   uint target;
   int c;
   char cbuf;
-
   target = n;
   acquire(&cons.lock);
   while(n > 0){
@@ -136,7 +134,6 @@ void
 consoleintr(int c)
 {
   acquire(&cons.lock);
-
   switch(c){
   case C('P'):  // Print process list.
     procdump();

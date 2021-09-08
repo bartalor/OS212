@@ -333,8 +333,10 @@ void
 iput(struct inode *ip)
 {
   acquire(&itable.lock);
-
-  if(ip->ref == 1 && ip->valid && ip->nlink == 0){
+  // printf("ip->ref: %d\n", ip->ref);
+  // printf("ip->valid: %d\n", ip->valid);
+  // printf("ip->nlink: %d\n", ip->nlink);
+  if(ip->ref == 1 && ip->valid && ip->nlink == 0) {
     // inode has no links and no other references: truncate and free.
 
     // ip->ref == 1 means no other process can have ip locked,
@@ -352,7 +354,6 @@ iput(struct inode *ip)
 
     acquire(&itable.lock);
   }
-
   ip->ref--;
   release(&itable.lock);
 }

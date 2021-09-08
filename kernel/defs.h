@@ -8,6 +8,7 @@ struct spinlock;
 struct sleeplock;
 struct stat;
 struct superblock;
+struct sigaction;
 
 // bio.c
 void            binit(void);
@@ -89,7 +90,7 @@ int             growproc(int);
 void            proc_mapstacks(pagetable_t);
 pagetable_t     proc_pagetable(struct proc *);
 void            proc_freepagetable(pagetable_t, uint64);
-int             kill(int);
+int             kill(int, int);
 struct cpu*     mycpu(void);
 struct cpu*     getmycpu(void);
 struct proc*    myproc();
@@ -105,6 +106,29 @@ void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
+uint            sigprocmask(uint sigmask);
+int             sigaction(int signum, uint64 act, uint64 oldact);
+void            sigret(void);
+void            do_sig_stop(void);
+void            do_sig_cont(void);
+void            checkSignals(void);
+struct thread*  mythread();
+struct thread*  get_thread(int tid);
+void            kill_and_wait_for_bros_to_die(void);
+int             kthread_join(int thread_id, int *status);
+int             count_threads(void);
+void            exit_last_thread_and_process(int status);
+void            kthread_exit(int status);
+void            wake_process(struct proc *p);
+int             kthread_create ( void ( *start_func ) ( ) , void *stack );
+void            kthread_exit(int status);
+void            seminit(void);
+int              bsem_alloc() ;
+struct           bsem *find_bsem(int bid);
+void             bsem_free(int bid) ;
+void             bsem_down(int bid);
+void             bsem_up(int bid);
+int              kthread_id();
 
 // swtch.S
 void            swtch(struct context*, struct context*);

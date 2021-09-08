@@ -23,7 +23,6 @@ int
 pipealloc(struct file **f0, struct file **f1)
 {
   struct pipe *pi;
-
   pi = 0;
   *f0 = *f1 = 0;
   if((*f0 = filealloc()) == 0 || (*f1 = filealloc()) == 0)
@@ -108,7 +107,6 @@ piperead(struct pipe *pi, uint64 addr, int n)
   int i;
   struct proc *pr = myproc();
   char ch;
-
   acquire(&pi->lock);
   while(pi->nread == pi->nwrite && pi->writeopen){  //DOC: pipe-empty
     if(pr->killed){

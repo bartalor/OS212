@@ -24,6 +24,20 @@ sys_getpid(void)
 }
 
 uint64
+sys_kthread_id(void)
+{
+  struct thread *t = mythread();
+  int temp = t->tid;
+  return temp;
+}
+
+uint64
+sys_get_father_pid(void)
+{
+  return (uint64)mythread()->proc->pid;
+}
+
+uint64
 sys_fork(void)
 {
   return fork();
@@ -57,13 +71,13 @@ sys_sleep(void)
 {
   int n;
   uint ticks0;
-
+  //struct proc *p = myproc();
   if(argint(0, &n) < 0)
     return -1;
   acquire(&tickslock);
   ticks0 = ticks;
   while(ticks - ticks0 < n){
-    if(myproc()->killed){
+    if(mythread()->killed){
       release(&tickslock);
       return -1;
     }
@@ -77,10 +91,112 @@ uint64
 sys_kill(void)
 {
   int pid;
+  int signum;
 
-  if(argint(0, &pid) < 0)
+  if(argint(0, &pid) < 0 || argint(1, &signum) < 0)
     return -1;
-  return kill(pid);
+
+  return kill(pid, signum);
+}
+
+
+//*sigprocmask system call
+uint64
+sys_sigprocmask(void)
+{
+  int mask;
+
+  if(argint(0, &mask) < 0)
+    return -1;
+  return sigprocmask(mask);
+}
+
+uint64
+sys_kthread_create(void)
+{
+  void (*start_func)()=0;
+  void *stack=0;
+  if(argaddr(0, (uint64*)&start_func) < 0 || argaddr(1, (uint64*)&stack) < 0)
+    return -1;
+  return kthread_create(start_func,stack);
+}
+
+uint64
+sys_kthread_join(void)
+{
+  int thread_id;
+  int* status;
+  if(argint(0, &thread_id) < 0 || argaddr(1, (uint64*)&status) < 0)
+    return -1;
+  return kthread_join(thread_id,status);
+}
+
+
+uint64
+sys_bsem_alloc(void)
+{
+  return bsem_alloc();
+}
+
+uint64
+sys_bsem_free(void)
+{
+  int desc;
+  if(argint(0, &desc) < 0)
+    return -1;
+  bsem_free(desc);
+  return 0;
+}
+
+uint64
+sys_bsem_down(void)
+{
+  int desc;
+
+  if(argint(0, &desc) < 0)
+    return -1;
+  bsem_down(desc);
+  return 0;
+}
+
+uint64
+sys_bsem_up(void)
+{
+  int desc;
+
+  if(argint(0, &desc) < 0)
+    return -1;
+  bsem_up(desc);
+  return 0;
+}
+
+uint64
+sys_kthread_exit(void)
+{
+  int status;
+  if(argint(0, &status) < 0)
+    return -1;
+  kthread_exit(status);
+  return 0;
+}
+
+uint64
+sys_sigaction(void)
+{
+  int signum;
+  uint64 act;
+  uint64 oldact;
+
+  if(argint(0, &signum) < 0 || argaddr(1, &act) < 0 || argaddr(2, &oldact) < 0)
+    return -1;
+
+  return sigaction(signum, act, oldact);
+}
+
+uint64
+sys_sigret(void)  {
+  sigret();
+  return 0;
 }
 
 // return how many clock tick interrupts have occurred

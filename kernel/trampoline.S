@@ -1,4 +1,4 @@
-	#
+	#include "syscall.h"
         # code to switch between user and kernel space.
         #
         # this code is mapped at the same virtual address
@@ -9,6 +9,8 @@
         # to a page boundary.
         #
 	.section trampsec
+.globl start_sigret_call
+.globl end_sigret_call
 .globl trampoline
 trampoline:
 .align 4
@@ -139,3 +141,10 @@ userret:
         # return to user mode and user pc.
         # usertrapret() set up sstatus and sepc.
         sret
+
+
+
+  start_sigret_call:
+  li a7,SYS_sigret
+  ecall
+  end_sigret_call:

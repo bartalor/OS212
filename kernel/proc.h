@@ -1,4 +1,8 @@
 // Saved registers for kernel context switches.
+
+
+
+
 struct context {
   uint64 ra;
   uint64 sp;
@@ -21,12 +25,15 @@ struct context {
 // Per-CPU state.
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
+  struct thread *thread;
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
 };
 
+
 extern struct cpu cpus[NCPU];
+
 
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
@@ -80,29 +87,74 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
-enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+
+
+//enum allstate {UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+enum procstate {UNUSED, USED, ZOMBIE};
+enum threadstate {T_UNUSED, T_USED, SLEEPING, RUNNABLE, RUNNING, T_ZOMBIE};
+
+
+
+struct thread {
+int tid;
+enum threadstate state;        // Process state
+void *chan;                  // If non-zero, sleeping on chan
+int killed;                  // If non-zero, have been killed
+int xstate;                  // Exit status to be returned to parent's wait
+uint64 kstack;               // Virtual address of kernel stack
+struct trapframe *trapframe; // data page for trampoline.S
+struct context context;      // swtch() here to run process
+struct spinlock lock;
+struct trapframe *tp_backup;
+struct proc *proc;
+};
 
 // Per-process state
 struct proc {
-  struct spinlock lock;
 
   // p->lock must be held when using these:
-  enum procstate state;        // Process state
-  void *chan;                  // If non-zero, sleeping on chan
-  int killed;                  // If non-zero, have been killed
+  
   int xstate;                  // Exit status to be returned to parent's wait
+  int xstateAssigned;
+  
+  enum procstate state;  
+  int stopped;                 // value 1 in case of being stopped, 0 otherwise
+  int killed;                  // If non-zero, have been killed
   int pid;                     // Process ID
+  struct spinlock lock;
 
   // proc_tree_lock must be held when using this:
   struct proc *parent;         // Parent process
 
   // these are private to the process, so p->lock need not be held.
-  uint64 kstack;               // Virtual address of kernel stack
+  
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
-  struct trapframe *trapframe; // data page for trampoline.S
-  struct context context;      // swtch() here to run process
+  
+  
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  //*enhance process data structure: 
+  struct spinlock innerlock;
+
+  uint pendingSignals;
+  uint signalMask;
+  uint backUpsignalMask;
+  void *signalHandlers[NUM_OF_SIGNALS];
+  struct sigaction sigactions[NUM_OF_SIGNALS];
+  void *trapframes;
+
+  //threads:
+  struct thread threads[NTHREAD];
+  int nextTid;
+  struct spinlock tid_lock;
+
+};
+
+struct bsem {
+  int bid;
+  int locked;
+  struct spinlock lock;
 };

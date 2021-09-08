@@ -87,7 +87,6 @@ void
 uartputc(int c)
 {
   acquire(&uart_tx_lock);
-
   if(panicked){
     for(;;)
       ;

@@ -20,3 +20,15 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
+#define SYS_sigprocmask 22
+#define SYS_sigaction 23
+#define SYS_sigret 24
+#define SYS_kthread_create 25
+#define SYS_kthread_id 26
+#define SYS_get_father_pid 27
+#define SYS_kthread_exit 28
+#define SYS_kthread_join 29
+#define SYS_bsem_alloc 30 
+#define SYS_bsem_free 31
+#define SYS_bsem_down 32
+#define SYS_bsem_up 33
