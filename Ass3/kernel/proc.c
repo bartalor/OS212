@@ -12,11 +12,20 @@ struct proc proc[NPROC];
 
 struct proc *initproc;
 
+#if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+static char buff[PGSIZE];
+#endif
+
 int nextpid = 1;
 struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+int nextRamIdx();
+int nextSwapIdx();
+int indexOfOccupied(void* va);
+void deletePageInRam(void* va);
+void deletePageInDisk(void* va);
 
 extern char trampoline[]; // trampoline.S
 
@@ -119,7 +128,16 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->clock = 0;
 
+  //Allocate swap file
+  
+  // if(p->pid>2){
+  //   release(&p->lock);
+  //   createSwapFile(p);
+  //   acquire(&p->lock);
+  // }
+  
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -163,6 +181,8 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  memset(p->ramArr, 0, sizeof(p->ramArr));
+  memset(p->swapArr, 0, sizeof(p->swapArr));
   p->state = UNUSED;
 }
 
@@ -224,7 +244,7 @@ uchar initcode[] = {
 // Set up first user process.
 void
 userinit(void)
-{
+{ 
   struct proc *p;
 
   p = allocproc();
@@ -275,7 +295,7 @@ fork(void)
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
-
+  if(DEBUG) printf("started fork function.\n");
   // Allocate process.
   if((np = allocproc()) == 0){
     return -1;
@@ -294,7 +314,7 @@ fork(void)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
-
+ 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
@@ -310,6 +330,69 @@ fork(void)
   acquire(&wait_lock);
   np->parent = p;
   release(&wait_lock);
+
+#if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  if(pid > 2){
+    createSwapFile(np);
+  }
+
+  if(p->pid > 2 && pid > 2){
+  int offset = 0;
+  int bytesRead = 0;
+  while((bytesRead = readFromSwapFile(p, buff, offset , PGSIZE)) != 0){
+      if(writeToSwapFile(np, buff, offset , PGSIZE) < -1){
+      panic("error in writinig to file: proc.c,  fork ");
+    }
+    offset = offset + bytesRead;
+  }    
+
+  for(i = 0; i< MAX_PSYC_PAGES; i++){
+
+    if(p->ramArr[i].occupied){
+      np->ramArr[i].occupied = 1;
+      np->ramArr[i].offset = p->ramArr[i].offset;
+      np->ramArr[i].pagetable = np->pagetable;
+      np->ramArr[i].va_addr = p->ramArr[i].va_addr;
+      np->ramArr[i].counter = p->ramArr[i].counter;
+    }
+    
+    else{
+      np->ramArr[i].occupied = 0;
+      np->ramArr[i].offset = 0;
+      np->ramArr[i].pagetable = 0;
+      np->ramArr[i].va_addr = 0;
+      #if defined(NFUA)
+        np->ramArr[i].counter = 0;
+      #elif defined(LAPA)
+        np->ramArr[i].counter = 0xFFFFFFFF;
+      #endif
+    }
+
+      if(p->swapArr[i].occupied){
+      np->swapArr[i].occupied = 1;
+      np->swapArr[i].offset = p->swapArr[i].offset;
+      np->swapArr[i].pagetable = np->pagetable;
+      np->swapArr[i].va_addr = p->swapArr[i].va_addr;
+    }
+
+    else{
+      np->swapArr[i].occupied =  0;
+      np->swapArr[i].offset =  0;
+      np->swapArr[i].pagetable =  0;
+      np->swapArr[i].va_addr =  0;
+    }
+  }
+}
+
+#if defined(LAPA)
+if( pid == 3 ){
+  for(i = 0; i< MAX_PSYC_PAGES; i++){
+    np->ramArr[i].counter = 0xFFFFFFFF;
+  }
+}
+#endif
+
+#endif
 
   acquire(&np->lock);
   np->state = RUNNABLE;
@@ -352,6 +435,13 @@ exit(int status)
       p->ofile[fd] = 0;
     }
   }
+
+     #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+              if(p->pid > 2){
+              if(removeSwapFile(p) < 0)
+                panic("exit: remove swap file"); 
+              }
+           #endif
 
   begin_op();
   iput(p->cwd);
@@ -454,7 +544,9 @@ scheduler(void)
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
-
+        #if defined(NFUA) || defined(LAPA)
+        update_counters();
+        #endif
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
@@ -594,6 +686,72 @@ kill(int pid)
     release(&p->lock);
   }
   return -1;
+}
+
+//assignment 3 helper functions: 
+
+int nextRamIdx(){
+  struct proc *p = myproc();
+  int i;
+  for(i = 0; i<MAX_PSYC_PAGES; i++){
+    if(p->ramArr[i].occupied == 0){
+      return i;
+    }
+  }
+  return -1;
+}
+
+int nextSwapIdx(){
+  struct proc *p = myproc();
+  int i;
+  for(i = 0; i<MAX_PSYC_PAGES; i++){
+    if(p->swapArr[i].occupied == 0){
+      return i;
+    }
+  }
+  return -1;
+}
+
+int indexOfOccupied(void* va){
+  struct proc *p = myproc();
+  int i;
+  for(i = 0; i< MAX_PSYC_PAGES; i++){
+    if(p->swapArr[i].va_addr == va){
+      return i;
+    }
+  }
+  return -1;
+}
+
+void deletePageInRam(void* va){
+  
+  struct proc *p = myproc();
+  for(int i = 0; i< MAX_PSYC_PAGES; i++){
+    if(p->ramArr[i].va_addr == va){
+      p->ramArr[i].occupied = 0;
+      p->ramArr[i].offset = 0;
+      p->ramArr[i].pagetable = 0;
+      p->ramArr[i].va_addr = 0;
+      #if defined(NFUA)
+        p->ramArr[i].counter = 0;
+      #elif defined(LAPA)
+        p->ramArr[i].counter = 0xFFFFFFFF;
+      #endif
+    }
+  }
+}
+
+void deletePageInDisk(void* va){
+  
+  struct proc *p = myproc();
+  for(int i = 0; i< MAX_PSYC_PAGES; i++){
+    if(p->swapArr[i].va_addr == va){
+      p->swapArr[i].occupied = 0;
+      p->swapArr[i].offset = 0;
+      p->swapArr[i].pagetable = 0;
+      p->swapArr[i].va_addr = 0;
+    }
+  }
 }
 
 // Copy to either a user address, or kernel address,

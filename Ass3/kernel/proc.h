@@ -80,6 +80,14 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+struct pageData{
+int occupied; // 0 If this struct is free 1 otherwise
+void* va_addr; //va for pagetable
+pagetable_t pagetable; //the page table which va is belong to
+int offset; //offset in swap file
+uint counter;
+};
+
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
 // Per-process state
@@ -106,5 +114,12 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
+  
+  //uint64 guard[10];
+  struct pageData ramArr[MAX_PSYC_PAGES];
+  struct pageData swapArr[MAX_PSYC_PAGES];
+  int clock;
   struct file *swapFile;
+  
+  
 };

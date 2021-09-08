@@ -65,9 +65,26 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  
+  else if(r_scause() == 12){
+    //  printf("instruction pagefault occurred.");
+    handle_pagefault();
+  }
+
+  else if(r_scause() == 13 || r_scause() == 15){
+    handle_pagefault();
+  }
+  
+  #endif
+
+  else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

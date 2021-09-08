@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -14,6 +16,14 @@ pagetable_t kernel_pagetable;
 extern char etext[];  // kernel.ld sets this to end of kernel code.
 
 extern char trampoline[]; // trampoline.S
+
+static char buffer[PGSIZE];
+
+int indexToSwapOut(void);
+int second_chance_fifo(void);
+void  allocIntoRam(pagetable_t pagetable, int nextRamIndex, uint64 va );
+void  allocWithSwap(pagetable_t pagetable, uint64 va );
+void  handle_pagefault();
 
 // Make a direct-map page table for the kernel.
 pagetable_t
@@ -171,11 +181,14 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+
+    if((*pte & PTE_V) == 0 && (*pte & PTE_PG) == 0)
+        panic("uvmunmap: not mapped");
+    
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-    if(do_free){
+
+    if(do_free && (*pte & PTE_V)){
       uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
@@ -191,7 +204,7 @@ uvmcreate()
   pagetable_t pagetable;
   pagetable = (pagetable_t) kalloc();
   if(pagetable == 0)
-    return 0;
+    return 0; 
   memset(pagetable, 0, PGSIZE);
   return pagetable;
 }
@@ -217,6 +230,9 @@ uvminit(pagetable_t pagetable, uchar *src, uint sz)
 uint64
 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  struct proc *p = myproc();
+  #endif
   char *mem;
   uint64 a;
 
@@ -236,8 +252,381 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
+
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+    if(p->pid > 2){
+      int nextRamIndex = nextRamIdx();
+      if(nextRamIndex != -1){
+        //alloc no swap
+        allocIntoRam(pagetable, nextRamIndex, a);
+      }
+
+      else{
+        //alloc with swap
+        allocWithSwap(pagetable, a);
+      }
+    } 
+    #endif
   }
+   
   return newsz;
+}
+
+void allocIntoRam(pagetable_t pagetable, int nextRamIndex, uint64 va ){
+  
+  struct proc *p = myproc();
+  p->ramArr[nextRamIndex].occupied = 1;
+  p->ramArr[nextRamIndex].offset = -1;
+  p->ramArr[nextRamIndex].pagetable = pagetable;
+  p->ramArr[nextRamIndex].va_addr =(void *) va;
+
+}
+
+void allocWithSwap(pagetable_t pagetable, uint64 va ){
+
+  struct proc *p = myproc();
+  int idxToSwapOut = indexToSwapOut();
+  int freeIndexInDisk = nextSwapIdx();
+  pte_t *swapped_pte;
+  struct pageData *page;
+  uint64 pa_towrite;
+
+  if(freeIndexInDisk == -1)
+    panic("Disk is full, page limit");
+
+  page = &p->ramArr[idxToSwapOut];
+  swapped_pte = walk(page->pagetable, (uint64)page->va_addr,0);
+  pa_towrite = PTE2PA((*swapped_pte));
+  
+  if(writeToSwapFile(p, (char*)pa_towrite, (freeIndexInDisk*PGSIZE) , PGSIZE) < 0)
+    panic("writeToSwapFile: vm.c - allocWithSwap");
+
+  //continue debugging from here - need to check the whole code
+  p->swapArr[freeIndexInDisk].occupied = 1;
+  p->swapArr[freeIndexInDisk].offset = freeIndexInDisk*PGSIZE;
+  p->swapArr[freeIndexInDisk].pagetable = page->pagetable;
+  p->swapArr[freeIndexInDisk].va_addr = page->va_addr;
+
+  //ram Array at idxToSwapOut is free: 
+  p->ramArr[idxToSwapOut].occupied = 0;
+  p->ramArr[idxToSwapOut].offset = 0;
+  p->ramArr[idxToSwapOut].pagetable = 0;
+  p->ramArr[idxToSwapOut].va_addr = 0;
+  #if defined(NFUA)
+    p->ramArr[idxToSwapOut].counter = 0;
+  #elif defined(LAPA)
+    p->ramArr[idxToSwapOut].counter = 0xFFFFFFFF;
+  #endif
+
+  *swapped_pte |= PTE_PG;
+  *swapped_pte &= ~PTE_V;
+  kfree((void*)pa_towrite);
+  
+  //reserve new page in Ram: 
+  p->ramArr[idxToSwapOut].occupied = 1;
+  p->ramArr[idxToSwapOut].offset = -1;
+  p->ramArr[idxToSwapOut].pagetable = pagetable;
+  p->ramArr[idxToSwapOut].va_addr = (void *)va;
+
+  sfence_vma(); // flush the tlb
+}
+
+int indexToSwapOut(){
+  int retIdx = -1;
+  #if defined (SCFIFO)
+    if(DEBUG) print_scfifo_details();
+    retIdx = second_chance_fifo();
+  #elif defined (NFUA)
+    if(DEBUG) print_nfu_counters();
+    retIdx = nfua();
+  #elif defined (LAPA)
+    if(DEBUG) print_lapa_counters();
+    retIdx = lapa();
+  #endif
+  if(retIdx == -1) panic("indexToSwapOut: evil index");
+  if(DEBUG) printf("chose page: %d\n",retIdx);
+  return retIdx;
+}
+
+void print_scfifo_details(void)
+{
+  int i;
+  // int cur_occupied;
+  struct proc *p = myproc();
+  uint64 cur_va;
+  pagetable_t cur_pgtbl;
+  pte_t *cur_pte;
+  printf("print scfifo details:\n");
+  printf("clock: %d\n", p->clock);
+  printf("accessed pages:\n");
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {
+    cur_va = (uint64)p->ramArr[i].va_addr;
+    cur_pgtbl = p->ramArr[i].pagetable;
+    cur_pte = walk(cur_pgtbl,cur_va,0);
+    if(*cur_pte & PTE_A)
+      printf("%d  ", i);
+
+  }
+  printf("\n");
+}
+
+void print_nfu_counters(void)
+{
+  int i;
+  uint cur_counter;
+  struct proc *p = myproc();
+  printf("\n\nprint_nfu_counters:\n");
+  // int cur_occupied;
+  printf("pages with counter not zero:\n");
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {
+    // cur_occupied = p->ramArr[i].occupied;
+    cur_counter = p->ramArr[i].counter;
+    
+      printf("i: %d, cnt: %p    \n", i, cur_counter);
+  }
+  printf("\n\n");
+}
+void print_lapa_counters(void)
+{
+  int i;
+  uint cur_counter;
+  struct proc *p = myproc();
+  printf("\n\nprint_lapa_counters:\n");
+  // int cur_occupied;
+  printf("pages with counter not zero:\n");
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {
+    // cur_occupied = p->ramArr[i].occupied;
+    cur_counter = p->ramArr[i].counter;
+    // if(cur_counter != 0xffffffff)
+      printf("i: %d, cnt: %p    \n", i, cur_counter);
+  }
+  printf("\n\n");
+}
+
+void update_counters(void)
+{
+  // TODO: pageData pagetables
+  struct proc *p = myproc();
+  int i;
+  pte_t *cur_pte;
+  uint64 cur_va;
+  pagetable_t cur_pgtbl;
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {
+    if (p->ramArr[i].occupied == 0) continue;
+
+    cur_pgtbl = p->ramArr[i].pagetable;
+    cur_va = (uint64)p->ramArr[i].va_addr;
+    cur_pte = walk(cur_pgtbl, cur_va, 0);
+    p->ramArr[i].counter >>= 1;
+    if (*cur_pte & PTE_A)
+    {
+      *cur_pte &= ~PTE_A;
+      p->ramArr[i].counter |= (1 << 31);
+    }
+  }
+}
+
+int count_ones(uint num)
+{
+  int res = 0;
+  while (num)
+  {
+    res += (num & 1);
+    num /= 2;
+  }
+  return res;
+}
+
+ //Second Chande FIFO
+int second_chance_fifo(){
+     struct proc *p = myproc();
+    while(1){
+    pte_t *pte = walk(p->ramArr[p->clock].pagetable,(uint64) p->ramArr[p->clock].va_addr, 0);
+     if((*pte & PTE_A)){
+         *pte &= ~PTE_A;
+          p->clock = (p->clock + 1)%(MAX_PSYC_PAGES); //getting a second chance
+      }
+
+     else{
+       int toRet = p->clock;
+       p->clock = (p->clock+ 1)%(MAX_PSYC_PAGES);
+       return toRet;
+     }
+  }
+  
+  return -1;
+
+}
+
+int nfua(void)
+{
+  int i;
+  struct proc *p = myproc();
+  // TODO
+  uint smallest = __INT_MAX__;
+  uint cur_counter;
+  int retIdx = -1;
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {
+    cur_counter = p->ramArr[i].counter;
+
+    if (smallest <= cur_counter)
+      continue;
+
+    smallest = cur_counter;
+    retIdx = i;
+  }
+
+  return retIdx;
+}
+
+int lapa(void)
+{
+  struct proc *p = myproc();
+  uint cur_counter, least = __INT_MAX__;
+  int i, ret = -1;
+  for (i = 0; i < MAX_PSYC_PAGES; i++)
+  {
+
+    cur_counter = p->ramArr[i].counter;
+
+    if (count_ones(least) < count_ones(cur_counter))
+      continue;
+
+    if (count_ones(least) == count_ones(cur_counter))
+      if (least <= cur_counter)
+        continue;
+
+    least = cur_counter;
+    ret = i;
+  }
+  return ret;
+}
+
+void handle_pagefault(){
+  
+  struct proc *p = myproc();
+  pte_t *pte;
+  uint64 va = r_stval(); //get virtual address that caused the page fault
+  uint64 start_page =  PGROUNDDOWN(va);
+
+  pte = walk(p->pagetable, start_page, 0); //pte of missing adress
+
+   if((*pte & PTE_PG) == 0){
+      panic("must not happen - indicates problem");
+  }
+
+  void* new_page = kalloc();
+  memset(new_page, 0, PGSIZE);
+  int nextRamIndex = nextRamIdx();
+  int idxOfOccupied;
+
+  //if there is place in Ram 
+  if(nextRamIndex != -1){
+    
+      idxOfOccupied = indexOfOccupied((void *)start_page); //index of the page to be retrieved
+      if(idxOfOccupied == -1){
+        panic("problem occure - page not in disk!");
+      }
+      if(readFromSwapFile(p, buffer, p->swapArr[idxOfOccupied].offset, PGSIZE)< 0)
+          panic("Read from swapped file failed: vm.c, handle_pagefault");
+
+      //copy from swapped file into ram 
+      p->ramArr[nextRamIndex].occupied = 1;
+      p->ramArr[nextRamIndex].offset = -1;
+      p->ramArr[nextRamIndex].pagetable= p->swapArr[idxOfOccupied].pagetable;
+      p->ramArr[nextRamIndex].va_addr= p->swapArr[idxOfOccupied].va_addr;
+
+      //freeing swapArr at idxOfOccupied
+      p->swapArr[idxOfOccupied].occupied = 0;
+      p->swapArr[idxOfOccupied].offset = 0;
+      p->swapArr[idxOfOccupied].pagetable = 0;
+      p->swapArr[idxOfOccupied].va_addr = 0;
+
+      //coppying buffer into new physical page allocated above via the same virtual address
+      memmove((void *)new_page, buffer, PGSIZE);
+      mappages(p->pagetable, (uint64)start_page, PGSIZE, (uint64)new_page, PTE_X | PTE_W | PTE_U | PTE_R);
+      *pte &= ~PTE_PG;
+      *pte |= PTE_V; 
+      sfence_vma(); // flush the tlb
+      
+    }
+
+  //else: There is no place in ram
+  else{
+  
+    int idxToSwapOut = indexToSwapOut(); //index in ram to swap out 
+    struct pageData *page = &p->ramArr[idxToSwapOut];
+    int freeIndexInDisk;
+    pte_t* pteOfSwapped;
+    uint64 pa;
+    void * va_ofSwapped; //to handle advance case 
+    pagetable_t pt_ofSwapped; //to handle advance case
+
+    idxOfOccupied = indexOfOccupied((void *)start_page); //index of the page to be retrieved
+    if(idxOfOccupied == -1){
+        panic("problem occure - page not in disk!");
+      }
+
+    //reading relevant data from file
+    if(readFromSwapFile(p, buffer, p->swapArr[idxOfOccupied].offset, PGSIZE)< 0)
+        panic("Read from swapped file failed: vm.c, handle_pagefault");
+
+    //needed to be used in the end of the code - helping for handling extreme case
+    va_ofSwapped = p->swapArr[idxOfOccupied].va_addr;
+    pt_ofSwapped = p->swapArr[idxOfOccupied].pagetable;
+    //freeing swapArr at idxOfOccupied
+    p->swapArr[idxOfOccupied].occupied = 0;
+    p->swapArr[idxOfOccupied].offset = 0;
+    p->swapArr[idxOfOccupied].pagetable = 0;
+    p->swapArr[idxOfOccupied].va_addr = 0;        
+    
+   pteOfSwapped = walk(page->pagetable, (uint64)page->va_addr, 0);
+   pa = PTE2PA((pte_t)*pteOfSwapped);
+   freeIndexInDisk = nextSwapIdx();
+
+  //write to disk the page that needs to be swapped
+  if(writeToSwapFile(p, (char *)pa, freeIndexInDisk*PGSIZE , PGSIZE) < 0)
+    panic("writeToSwapFile: vm.c - allocWithSwap");
+
+  //updating swapArr
+  p->swapArr[freeIndexInDisk].occupied = 1;
+  p->swapArr[freeIndexInDisk].offset = freeIndexInDisk*PGSIZE;
+  p->swapArr[freeIndexInDisk].pagetable = page->pagetable;
+  p->swapArr[freeIndexInDisk].va_addr = page->va_addr;
+
+  *pteOfSwapped |= PTE_PG;
+  *pteOfSwapped &= ~PTE_V;
+   
+   p->ramArr[idxToSwapOut].occupied = 0;
+   p->ramArr[idxToSwapOut].offset = 0;
+   p->ramArr[idxToSwapOut].pagetable = 0;
+   p->ramArr[idxToSwapOut].va_addr = 0;
+   #if defined(NFUA)
+    p->ramArr[idxToSwapOut].counter = 0;
+   #elif defined(LAPA)
+    p->ramArr[idxToSwapOut].counter = 0xFFFFFFFF;
+   #endif
+    
+    //copy from swapped file into ram  
+    nextRamIndex = nextRamIdx();
+    p->ramArr[nextRamIndex].occupied = 1;
+    p->ramArr[nextRamIndex].offset = -1;
+    p->ramArr[nextRamIndex].pagetable= pt_ofSwapped;//p->swapArr[idxOfOccupied].pagetable;
+    p->ramArr[nextRamIndex].va_addr= va_ofSwapped;//p->swapArr[idxOfOccupied].va_addr;
+
+  
+  kfree((void *)pa); //free the physical page that has been swapped to disk 
+  memmove((void *)new_page, buffer, PGSIZE); //copy data from buffer into start_page
+  mappages(p->pagetable, (uint64)start_page, PGSIZE, (uint64)new_page, PTE_X | PTE_W | PTE_U | PTE_R);
+  *pte &= ~PTE_PG;
+  *pte |= PTE_V; 
+  sfence_vma(); // flush the tlb
+  }
 }
 
 // Deallocate user pages to bring the process size from oldsz to
@@ -247,6 +636,9 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 uint64
 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  uint64 a;
+  #endif
   if(newsz >= oldsz)
     return oldsz;
 
@@ -255,6 +647,13 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
     uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);
   }
 
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  //old size is the highest address new size is the lowest address
+  for(a = oldsz; a > newsz; a -= PGSIZE){
+    deletePageInRam((void *) a);  // if exsists delete from ram
+    deletePageInDisk((void *) a); // if exsists delete from disk
+  }
+  #endif
   return newsz;
 }
 
@@ -305,8 +704,19 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+
+  if((*pte & PTE_V) == 0 && (*pte & PTE_PG) == 0)
       panic("uvmcopy: page not present");
+
+    if((*pte & PTE_V) == 0 && (*pte & PTE_PG) != 0){
+      pte_t *new_pte;
+      if((new_pte = walk(new, i, 1)) == 0){
+        panic("cannot create new pte - vm.c, uvmcopy");
+      }
+      *new_pte = *pte;
+      continue;
+    }
+
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

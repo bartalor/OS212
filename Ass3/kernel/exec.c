@@ -9,11 +9,70 @@
 
 static int loadseg(pde_t *pgdir, uint64 addr, struct inode *ip, uint offset, uint sz);
 
+//Variables to store old data:
+ struct pageData ramArr_backup[MAX_PSYC_PAGES];
+ struct pageData swapArr_backup[MAX_PSYC_PAGES];
+ int clock_backup;
+ struct file *swapFile_backup;
+
+ void backup(){
+   struct proc *p = myproc();
+   int i;
+   for(i = 0; i<MAX_PSYC_PAGES; i++){
+     
+     //backing up ram arr
+     ramArr_backup[i].occupied = p->ramArr[i].occupied;
+     ramArr_backup[i].offset = p->ramArr[i].offset;
+     ramArr_backup[i].pagetable = p->ramArr[i].pagetable;
+     ramArr_backup[i].va_addr = p->ramArr[i].va_addr;
+     ramArr_backup[i].counter = p->ramArr[i].counter;
+
+     //backing up swap arr
+     swapArr_backup[i].occupied = p->swapArr[i].occupied;
+     swapArr_backup[i].offset = p->swapArr[i].offset;
+     swapArr_backup[i].pagetable = p->swapArr[i].pagetable;
+     swapArr_backup[i].va_addr = p->swapArr[i].va_addr;
+
+   }
+
+  clock_backup = p->clock;
+  swapFile_backup = p->swapFile;
+ }
+
+ void restore(){
+     struct proc *p = myproc();
+   int i;
+   for(i = 0; i<MAX_PSYC_PAGES; i++){
+     
+     //restoring ram arr
+      p->ramArr[i].occupied = ramArr_backup[i].occupied;
+      p->ramArr[i].offset = ramArr_backup[i].offset;
+      p->ramArr[i].pagetable = ramArr_backup[i].pagetable;
+      p->ramArr[i].va_addr = ramArr_backup[i].va_addr;
+      p->ramArr[i].counter = ramArr_backup[i].counter;
+
+     //restoring swap arr
+      p->swapArr[i].occupied = swapArr_backup[i].occupied;
+      p->swapArr[i].offset = swapArr_backup[i].offset;
+      p->swapArr[i].pagetable = swapArr_backup[i].pagetable;
+      p->swapArr[i].va_addr = swapArr_backup[i].va_addr;
+  
+   }
+
+  p->clock = clock_backup;
+  p->swapFile = swapFile_backup;
+ }
+
+
 int
 exec(char *path, char **argv)
 {
+  
   char *s, *last;
-  int i, off;
+  int i, off ;
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  int k;
+  #endif
   uint64 argc, sz = 0, sp, ustack[MAXARG+1], stackbase;
   struct elfhdr elf;
   struct inode *ip;
@@ -21,6 +80,31 @@ exec(char *path, char **argv)
   pagetable_t pagetable = 0, oldpagetable;
   struct proc *p = myproc();
 
+  if(DEBUG) printf("started exec function.\n");
+
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+    if(p->pid > 2){
+      
+      backup();
+      for(k = 0; k <MAX_PSYC_PAGES; k++){
+        p->ramArr[k].occupied = 0;
+        p->ramArr[k].offset = 0;
+        p->ramArr[k].pagetable = 0;
+        p->ramArr[k].va_addr = 0;
+        #if defined(NFUA)
+          p->ramArr[k].counter = 0;
+        #elif defined(LAPA)
+          p->ramArr[k].counter = 0xFFFFFFFF;
+        #endif
+
+        p->swapArr[k].occupied = 0;
+        p->swapArr[k].offset = 0;
+        p->swapArr[k].pagetable = 0;
+        p->swapArr[k].va_addr = 0;
+      }
+    }
+  #endif
+  
   begin_op();
 
   if((ip = namei(path)) == 0){
@@ -109,11 +193,33 @@ exec(char *path, char **argv)
   safestrcpy(p->name, last, sizeof(p->name));
     
   // Commit to the user image.
+#if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+  if(p->pid > 2){
+    for(k = 0; k <MAX_PSYC_PAGES; k++){
+
+    if(p->ramArr[k].occupied){
+      p->ramArr[k].pagetable = pagetable;
+    }
+
+    if(p->swapArr[k].occupied){
+      p->swapArr[k].pagetable = pagetable;
+    }
+  }  
+}
+#endif
+
   oldpagetable = p->pagetable;
   p->pagetable = pagetable;
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+      if(p->pid >2){
+      removeSwapFile(p);
+      createSwapFile(p);
+      }
+
+  #endif
   proc_freepagetable(oldpagetable, oldsz);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
@@ -125,6 +231,12 @@ exec(char *path, char **argv)
     iunlockput(ip);
     end_op();
   }
+
+  #if (defined (SCFIFO) || defined(NFUA) || defined(LAPA)) 
+      if(p->pid >2)
+        restore();
+  #endif
+
   return -1;
 }
 
