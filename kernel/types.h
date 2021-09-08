@@ -8,3 +8,12 @@ typedef unsigned int  uint32;
 typedef unsigned long uint64;
 
 typedef uint64 pde_t;
+
+struct perf { 
+    int ctime;
+    int ttime;
+    int stime;
+    int retime;
+    int rutime;
+    int average_bursttime;
+}; 

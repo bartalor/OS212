@@ -11,3 +11,13 @@
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       1000  // size of file system in blocks
 #define MAXPATH      128   // maximum file path name
+#define QUANTUM      5 //* QUANTUM Intialize
+#define ALPHA 50
+#define DEFAULT_BURSTTIME 100*QUANTUM
+
+// priority decay constanst:
+#define TEST_HIGH_PRIORITY 1
+#define HIGH_PRIORITY 3
+#define NORMAL_PRIORITY 5
+#define LOW_PRIORITY 7 
+#define TEST_LOW_PRIORITY 25

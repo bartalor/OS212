@@ -63,6 +63,18 @@ runcmd(struct cmd *cmd)
   struct listcmd *lcmd;
   struct pipecmd *pcmd;
   struct redircmd *rcmd;
+  //*my code
+  int error = -1;
+  char path[256];
+  char prefix[256];
+  char concat [256];
+  char command[256];
+  int fdPath;
+  int pathLen;
+  int pos = 0;
+  int i;
+  int curr;
+  //*end of my code
 
   if(cmd == 0)
     exit(1);
@@ -75,8 +87,48 @@ runcmd(struct cmd *cmd)
     ecmd = (struct execcmd*)cmd;
     if(ecmd->argv[0] == 0)
       exit(1);
-    exec(ecmd->argv[0], ecmd->argv);
-    fprintf(2, "exec %s failed\n", ecmd->argv[0]);
+    
+
+    //*copy command
+    for(i = 0; i < strlen(ecmd->argv[0]); i++){
+      command[i] = ecmd->argv[0][i];
+    }
+    //*open path
+    fdPath = open("/path", O_RDWR);
+    while(read(fdPath, path, 1000) > 0);
+    close(fdPath);
+
+    //*while loop that checks every path if it is possible to activate the command
+    pathLen = strlen(path);
+    error = exec(ecmd->argv[0], ecmd->argv); //checks command in current directory - if not succeed try tha paths from path variable 
+    while(error == -1 && pos <= pathLen -1){
+      curr = 0;
+
+      //*for loop that gets the next splitted path
+      for(; pos < pathLen; pos++){
+        if(path[pos]!= ':'){
+          prefix[curr] = path[pos];
+          curr ++;
+        }
+        else{
+          pos++;
+          break;
+        }
+      }
+
+      //*fprintf(1, "prefixes: %s \n", prefix); //debug: splitting paths
+
+      //*loop that creates the concatenated prefix + command
+      for(i = 0; i < strlen(prefix) + strlen(ecmd->argv[0]); i++){
+        if(i < strlen(prefix))
+         concat[i] = prefix[i];
+         else
+          concat[i] = command[i - strlen(prefix)];
+      }
+      ecmd->argv[0] = concat;
+      error = exec(ecmd->argv[0], ecmd->argv);
+    }
+    fprintf(2, "exec %s failed\n", command);
     break;
 
   case REDIR:
@@ -154,6 +206,14 @@ main(void)
       break;
     }
   }
+
+  //initial the path file
+    //int fdPath = open("path", O_RDWR | O_CREATE);
+    //char pathBuf[] = "/:/user/:";
+    //write(fdPath, pathBuf, strlen(pathBuf));
+    //close(fdPath);
+    
+    
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){

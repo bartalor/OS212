@@ -36,3 +36,7 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+entry("trace"); #* Adding an entry for trace system call
+entry("wait_stat"); #* Adding an entry for wait_stat system call
+entry("set_priority");
+entry("get_priority");

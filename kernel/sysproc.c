@@ -1,11 +1,11 @@
 #include "types.h"
 #include "riscv.h"
 #include "defs.h"
-#include "date.h"
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+
 
 uint64
 sys_exit(void)
@@ -24,6 +24,11 @@ sys_getpid(void)
 }
 
 uint64
+sys_get_priority(void) {
+  return myproc()->priority;
+}
+
+uint64
 sys_fork(void)
 {
   return fork();
@@ -36,6 +41,20 @@ sys_wait(void)
   if(argaddr(0, &p) < 0)
     return -1;
   return wait(p);
+}
+
+//*wait_stat system call
+uint64
+sys_wait_stat(void)
+{ 
+  uint64 status;
+  uint64 performance;
+  
+  if(argaddr(0, &status) < 0 || argaddr(1, &performance) < 0)
+    return -1;
+
+  return wait_stat(status, performance);
+
 }
 
 uint64
@@ -71,6 +90,26 @@ sys_sleep(void)
   }
   release(&tickslock);
   return 0;
+}
+
+//*trace system call
+uint64
+sys_trace(void)
+{
+  int mask;
+  int pid;
+  argint(0, &mask);
+  argint(1, &pid);
+
+  return trace(mask, pid);
+}
+
+uint64
+sys_set_priority(void)
+{
+  int priority;
+  argint(0, &priority);
+  return set_priority(priority);
 }
 
 uint64

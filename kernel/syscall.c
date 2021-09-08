@@ -104,6 +104,11 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_trace(void);
+extern uint64 sys_wait_stat(void);
+extern uint64 sys_set_priority(void);
+extern uint64 sys_get_priority(void);
+
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,18 +132,86 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_trace]   sys_trace,
+[SYS_wait_stat]   sys_wait_stat,
+[SYS_set_priority] sys_set_priority,
+[SYS_get_priority] sys_get_priority
 };
+
+const char *sysCallNames[] = {
+[SYS_fork]    "fork",
+[SYS_exit]    "exit",
+[SYS_wait]    "wait",
+[SYS_pipe]    "pipe",
+[SYS_read]    "read",
+[SYS_kill]    "kill",
+[SYS_exec]    "exec",
+[SYS_fstat]   "fstat",
+[SYS_chdir]   "chdir",
+[SYS_dup]     "dup",
+[SYS_getpid]  "getpid",
+[SYS_sbrk]    "sbrk",
+[SYS_sleep]   "sleep",
+[SYS_uptime]  "uptime",
+[SYS_open]    "open",
+[SYS_write]   "write",
+[SYS_mknod]   "mknod",
+[SYS_unlink]  "unlink",
+[SYS_link]    "link",
+[SYS_mkdir]   "mkdir",
+[SYS_close]   "close",
+[SYS_trace]   "trace",
+[SYS_wait_stat]   "wait_stat",
+[SYS_set_priority]   "set_priority",
+[SYS_get_priority]   "get_priority"
+};
+
+
 
 void
 syscall(void)
 {
   int num;
+  int arg; //* holds arg in case of SYS_kill | SYS_sbrk
   struct proc *p = myproc();
 
   num = p->trapframe->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
+    //* if we trace SYS_kill | SYS_sbrk hold their argument in arg
+    if((p->mask & (1<<SYS_sbrk)) != 0 || (p->mask & (1<<SYS_kill)) != 0 ){
+      argint(0, &arg);
+    }
     p->trapframe->a0 = syscalls[num]();
-  } else {
+    //printf("mask is: %d \n\n", p->mask);
+    //* printing details of traced System Call
+    if((p->mask & (1<<num)) != 0){
+      switch(1<<num){
+        case (1<<SYS_fork):
+          printf("%d: syscall %s NULL -> %d \n" , p->pid, sysCallNames[num], p->trapframe->a0);
+          break;
+
+        case (1<<SYS_kill):
+          printf("%d: syscall %s %d -> %d \n" , p->pid, sysCallNames[num],arg, p->trapframe->a0);
+          break;
+        
+        case (1<<SYS_sbrk):
+         if(p->trapframe->a0 != 0){
+             printf("%d: syscall %s %d -> %d \n" , p->pid, sysCallNames[num], arg, p->trapframe->a0);
+         } 
+
+         else{
+           printf("%d: syscall %s %d -> %d \n" , p->pid, sysCallNames[num], arg, -1);
+         }
+          break;
+
+        default:
+          printf("%d: syscall %s -> %d \n" , p->pid, sysCallNames[num], p->trapframe->a0);
+
+      }
+    }
+  } 
+
+  else {
     printf("%d %s: unknown sys call %d\n",
             p->pid, p->name, num);
     p->trapframe->a0 = -1;

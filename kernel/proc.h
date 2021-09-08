@@ -1,3 +1,4 @@
+
 // Saved registers for kernel context switches.
 struct context {
   uint64 ra;
@@ -17,6 +18,7 @@ struct context {
   uint64 s10;
   uint64 s11;
 };
+
 
 // Per-CPU state.
 struct cpu {
@@ -92,7 +94,7 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
-
+  int mask;                    // mask to be traced
   // proc_tree_lock must be held when using this:
   struct proc *parent;         // Parent process
 
@@ -105,4 +107,15 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  //process time fields
+  int ctime;        // process creation time 
+  int ttime;        // process temination time 
+  int stime;        // the total time the process spent in the SLEEPING state
+  int retime;       // the total time the process spent in the RUNNABLE state
+  int rutime;      // the total time the process spent in the RUNNING state
+  int average_bursttime;    //approximate estimated burst time
+  int lastRuntime;
+  int priority;
+  int readyNum;
 };
